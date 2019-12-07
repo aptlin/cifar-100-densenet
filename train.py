@@ -4,12 +4,15 @@ from getpass import getpass
 import keyring
 import numpy as np
 import torch
+import torch.nn as nn
+from torch.autograd import Variable
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from comet_ml import Experiment
 from tqdm import tqdm
 
 from config import CIFAR_100_MEAN, CIFAR_100_STD, PROJECT
+from nets.densenet import DenseNet
 
 
 def read_args():
@@ -60,6 +63,7 @@ def read_args():
 
     parser.add_argument(
         "--comet-logging",
+        default=True,
         help="Whether to log progress to TensorBoard",
         action="store_true",
     )
@@ -67,7 +71,6 @@ def read_args():
 
 
 def train_and_evaluate():
-    args = read_args().parse_args()
     transform = transforms.Compose(
         [
             transforms.ToTensor(),
@@ -85,6 +88,13 @@ def train_and_evaluate():
     test_data = datasets.CIFAR100(
         root=data_dirname, train=False, download=True, transform=transform
     )
+
+    args = read_args().parse_args()
+    args.growth_rate = 32
+    args.block_config = (6, 12, 24, 16)
+    args.num_init_features = 64
+    args.bn_size = 4
+    args.num_classes = 1000
 
     train_loader = torch.utils.data.DataLoader(
         train_data,
@@ -115,4 +125,83 @@ def train_and_evaluate():
             workspace=PROJECT,
             auto_output_logging=None,
         )
+        experiment.log_parameters(vars(args))
+
+    model = DenseNet(
+        growth_rate=args.growth_rate,
+        block_config=args.block_config,
+        num_init_features=args.num_init_features,
+        bn_size=args.bn_size,
+        drop_rate=args.dropout,
+        num_classes=args.num_classes,
+    )
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    with experiment.train():
+        model.train()
+        step = 0
+        for epoch in range(args.num_epochs):
+            experiment.log_current_epoch(epoch)
+            correct = 0
+            total = 0
+            with tqdm(
+                total=len(train_data), desc="Epoch {}: Step".format(epoch)
+            ) as pbar:
+                for idx, (images, labels) in enumerate(train_loader):
+                    images = Variable(images.cuda())
+                    labels = Variable(images.cuda())
+
+                    optimizer.zero_grad()
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    optimizer.step()
+
+                    experiment.log_metric("loss", loss.data.item())
+
+                    total += labels.size(0)
+                    correct += float((outputs.data == labels.data).sum())
+                    experiment.log_metric(
+                        "accuracy", 100 * correct / total, step=step
+                    )
+                    step += 1
+                    if (idx + 1) % 100 == 0:
+                        print(
+                            "Epoch [%d/%d], Step [%d/%d], Loss: %.4f"
+                            % (
+                                epoch + 1,
+                                args.num_epochs,
+                                idx + 1,
+                                len(train_data) // args.batch_size,
+                                loss.data.item(),
+                            )
+                        )
+                    pbar.update()
+
+        with experiment.test():
+            model.eval()
+
+            correct = 0
+            total = 0
+            with tqdm(
+                total=len(test_data), desc="Test Step".format(epoch)
+            ) as pbar:
+                for idx, (images, labels) in enumerate(test_loader):
+                    images = Variable(images.cuda())
+                    labels = Variable(images.cuda())
+
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+
+                    total += labels.size(0)
+                    correct += float((outputs.data == labels.data).sum())
+            accuracy = 100 * correct / total
+            experiment.log_metric("accuracy", accuracy)
+            print(
+                "Test accuracy on {} images: {}".format(
+                    len(test_data), accuracy
+                )
+            )
 
