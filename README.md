@@ -1,6 +1,6 @@
 # Image classification demo of DenseNet in PyTorch on CIFAR 100
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sdll/cifar-100-densenet/demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sdll/cifar-100-densenet/blob/master/demo.ipynb)
 
 ## Architecture
 
